@@ -3,6 +3,8 @@ const crypto = require("crypto");
 
 const PORT = Number(process.env.PORT || process.env.APP_PORT || 4173);
 const BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
+const SESSION_COOKIE = "esc_session";
+const SESSION_TTL_SECONDS = 60 * 60 * 12;
 
 const providers = {
   arive: {
@@ -88,9 +90,99 @@ function event(provider, message, createdAt = new Date().toISOString()) {
   return { id: `evt-${crypto.randomUUID()}`, provider, message, createdAt };
 }
 
-function send(res, status, body, contentType = "application/json; charset=utf-8") {
-  res.writeHead(status, { "Content-Type": contentType, "Cache-Control": "no-store" });
+function send(res, status, body, contentType = "application/json; charset=utf-8", headers = {}) {
+  res.writeHead(status, { "Content-Type": contentType, "Cache-Control": "no-store", ...headers });
   res.end(contentType.includes("json") ? JSON.stringify(body, null, 2) : body);
+}
+
+function redirect(res, location) {
+  res.writeHead(302, { Location: location, "Cache-Control": "no-store" });
+  res.end();
+}
+
+function getAuthUsername() {
+  return process.env.LOGIN_USERNAME || process.env.ADMIN_USERNAME || "admin";
+}
+
+function getAuthPassword() {
+  return process.env.LOGIN_PASSWORD || process.env.ADMIN_PASSWORD || "";
+}
+
+function getSessionSecret() {
+  return process.env.SESSION_SECRET || process.env.WEBHOOK_SECRET || getAuthPassword();
+}
+
+function isAuthConfigured() {
+  return Boolean(getAuthPassword() && getSessionSecret());
+}
+
+function safeStringEqual(left, right) {
+  const leftHash = crypto.createHash("sha256").update(String(left)).digest();
+  const rightHash = crypto.createHash("sha256").update(String(right)).digest();
+  return crypto.timingSafeEqual(leftHash, rightHash);
+}
+
+function parseCookies(req) {
+  return Object.fromEntries(
+    String(req.headers.cookie || "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const equals = part.indexOf("=");
+        if (equals === -1) return [part, ""];
+        return [part.slice(0, equals), decodeURIComponent(part.slice(equals + 1))];
+      })
+  );
+}
+
+function signSession(payload) {
+  return crypto.createHmac("sha256", getSessionSecret()).update(payload).digest("base64url");
+}
+
+function createSessionToken(username) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      username,
+      expiresAt: Date.now() + SESSION_TTL_SECONDS * 1000
+    })
+  ).toString("base64url");
+  return `${payload}.${signSession(payload)}`;
+}
+
+function readSession(req) {
+  if (!isAuthConfigured()) return null;
+  const token = parseCookies(req)[SESSION_COOKIE];
+  if (!token || !token.includes(".")) return null;
+  const [payload, signature] = token.split(".");
+  if (!safeStringEqual(signature, signSession(payload))) return null;
+
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!session.username || Number(session.expiresAt) < Date.now()) return null;
+    return session;
+  } catch (error) {
+    return null;
+  }
+}
+
+function isAuthenticated(req) {
+  return Boolean(readSession(req));
+}
+
+function cookieSecurity(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").toLowerCase();
+  const host = String(req.headers.host || "").toLowerCase();
+  return forwardedProto === "https" || (!host.startsWith("localhost") && !host.startsWith("127.0.0.1"));
+}
+
+function sessionCookie(req, token) {
+  const secure = cookieSecurity(req) ? "; Secure" : "";
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_SECONDS}${secure}`;
+}
+
+function clearCookie() {
+  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
 }
 
 function summary(records) {
@@ -132,6 +224,32 @@ function readBody(req) {
   });
 }
 
+function readFormOrJson(req) {
+  return new Promise((resolve, reject) => {
+    const contentType = String(req.headers["content-type"] || "");
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 100_000) {
+        reject(new Error("Request body is too large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      try {
+        if (contentType.includes("application/json")) {
+          resolve(body ? JSON.parse(body) : {});
+          return;
+        }
+        resolve(Object.fromEntries(new URLSearchParams(body).entries()));
+      } catch (error) {
+        reject(new Error("Login request could not be read"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
 function normalize(provider, payload) {
   const data = Array.isArray(payload) ? payload[0] || {} : payload || {};
   const name = data.name || data.fullName || [data.firstName, data.lastName].filter(Boolean).join(" ") || "Unnamed record";
@@ -155,6 +273,34 @@ function normalize(provider, payload) {
   };
 }
 
+function loginPage(message = "") {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in | 8 Step Close</title>
+<style>
+:root{--bg:#f5f7f6;--surface:#fff;--border:#d8e0dc;--text:#1d2522;--muted:#61706a;--green:#12715b;--red:#b91c1c;--shadow:0 20px 50px rgba(22,35,30,.12)}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:center;padding:24px}.login{width:min(100%,420px);background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);padding:28px}.brand{display:flex;gap:12px;align-items:center;margin-bottom:24px}.mark{display:grid;place-items:center;width:44px;height:44px;border-radius:8px;background:#25443a;color:white;font-weight:800}.brand span{display:block;color:var(--muted);font-size:.9rem;margin-top:2px}h1{font-size:1.6rem;margin:0 0 18px}.field{display:grid;gap:7px;margin-bottom:14px}.field span{font-weight:750}.input{width:100%;min-height:44px;border:1px solid var(--border);border-radius:6px;padding:9px 11px;font:inherit}.button{width:100%;min-height:44px;border:0;border-radius:6px;background:var(--green);color:white;font:inherit;font-weight:800;cursor:pointer}.error{border:1px solid #f0b4b4;background:#fff0f0;color:var(--red);border-radius:6px;padding:10px;margin-bottom:14px}.setup{border:1px solid #f1d18a;background:#fff8e8;color:#6c4305;border-radius:6px;padding:10px;line-height:1.45}
+</style>
+</head>
+<body>
+<main class="login">
+<div class="brand"><div class="mark">8C</div><div><strong>8 Step Close</strong><span>Unified pipeline</span></div></div>
+<h1>Sign in</h1>
+${isAuthConfigured() ? "" : '<div class="setup">Login is not configured yet. Add LOGIN_USERNAME, LOGIN_PASSWORD, and SESSION_SECRET in Render.</div>'}
+${message ? `<div class="error">${message}</div>` : ""}
+<form method="post" action="/api/login">
+<label class="field"><span>Username</span><input class="input" name="username" autocomplete="username" required></label>
+<label class="field"><span>Password</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+<button class="button" type="submit">Sign in</button>
+</form>
+</main>
+</body>
+</html>`;
+}
+
 function page() {
   return `<!doctype html>
 <html lang="en">
@@ -171,7 +317,7 @@ function page() {
 </head>
 <body>
 <div class="app"><aside class="side"><div class="brand"><div class="mark">8C</div><div><strong>8 Step Close</strong><span>Unified pipeline</span></div></div><nav class="nav"><a href="#overview">Overview</a><a href="#connectors">Connectors</a><a href="#records">Records</a><a href="#webhooks">Webhooks</a></nav></aside>
-<main class="main"><header class="top"><div><p class="eyebrow">Today</p><h1>8 Step Close</h1></div><div><button id="refresh">Refresh</button> <button id="sync" class="primary">Check Sync</button></div></header>
+<main class="main"><header class="top"><div><p class="eyebrow">Today</p><h1>8 Step Close</h1></div><div><button id="refresh">Refresh</button> <button id="sync" class="primary">Check Sync</button> <button id="logout">Log Out</button></div></header>
 <section id="overview" class="metrics"><article class="metric"><span>Total records</span><strong id="totalRecords">0</strong></article><article class="metric"><span>Pipeline value</span><strong id="pipelineValue">$0</strong></article><article class="metric"><span>Hot items</span><strong id="hotItems">0</strong></article><article class="metric"><span>Active loans</span><strong id="activeLoans">0</strong></article></section>
 <section class="grid"><div id="connectors" class="panel"><div class="panel-head"><div><p class="eyebrow">Data sources</p><h2>Connectors</h2></div><span id="updated"></span></div><div id="connectorGrid" class="connectors"></div></div><div class="panel"><div class="panel-head"><div><p class="eyebrow">Activity</p><h2>Recent Events</h2></div></div><div id="events"></div></div></section>
 <section id="records" class="panel"><div class="panel-head"><div><p class="eyebrow">Unified view</p><h2>Records</h2></div><div class="filters"><input id="search" class="input" type="search" placeholder="Search records"><select id="provider" class="input"><option value="all">All sources</option></select><select id="type" class="input"><option value="all">All types</option><option value="lead">Leads</option><option value="loan">Loans</option><option value="contact">Contacts</option><option value="property">Properties</option><option value="opportunity">Opportunities</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Source</th><th>Type</th><th>Stage</th><th>Status</th><th>Value</th><th>Updated</th></tr></thead><tbody id="rows"></tbody></table></div></section>
@@ -188,7 +334,7 @@ function renderEvents(events){document.querySelector("#events").innerHTML=(event
 async function loadRecords(){const p=document.querySelector("#provider").value,t=document.querySelector("#type").value,q=document.querySelector("#search").value;const data=await api("/api/records?provider="+encodeURIComponent(p)+"&type="+encodeURIComponent(t)+"&q="+encodeURIComponent(q));records=data.records;document.querySelector("#rows").innerHTML=records.map(r=>'<tr><td><strong>'+r.name+'</strong><br><small>'+[r.email,r.phone].filter(Boolean).join(" · ")+'</small></td><td>'+((connectors.find(c=>c.id===r.provider)||{}).name||r.provider)+'</td><td>'+r.type+'</td><td>'+r.stage+'</td><td><span class="pill">'+r.status+'</span></td><td>'+(r.value?fmt.format(r.value):"")+'</td><td>'+date(r.updatedAt)+'</td></tr>').join("")||'<tr><td colspan="7">No records found.</td></tr>'}
 async function test(id){const r=await api("/api/test/"+id,{method:"POST",body:"{}"});alert(r.status+"\\n"+r.detail)}
 async function sync(id){await api("/api/sync/"+id,{method:"POST",body:"{}"});await load()}
-document.querySelector("#refresh").onclick=load;document.querySelector("#sync").onclick=async()=>{for(const c of connectors)await sync(c.id)};document.querySelector("#provider").onchange=loadRecords;document.querySelector("#type").onchange=loadRecords;document.querySelector("#search").oninput=loadRecords;document.querySelector("#webhookForm").onsubmit=async e=>{e.preventDefault();const id=document.querySelector("#webhookProvider").value;const r=await api("/api/webhooks/"+id,{method:"POST",body:document.querySelector("#payload").value});alert(r.warning||"Saved "+r.records.length+" record.");await load()};load();
+document.querySelector("#refresh").onclick=load;document.querySelector("#sync").onclick=async()=>{for(const c of connectors)await sync(c.id)};document.querySelector("#logout").onclick=async()=>{await fetch("/api/logout",{method:"POST"});location.href="/login"};document.querySelector("#provider").onchange=loadRecords;document.querySelector("#type").onchange=loadRecords;document.querySelector("#search").oninput=loadRecords;document.querySelector("#webhookForm").onsubmit=async e=>{e.preventDefault();const id=document.querySelector("#webhookProvider").value;const r=await api("/api/webhooks/"+id,{method:"POST",body:document.querySelector("#payload").value});alert(r.warning||"Saved "+r.records.length+" record.");await load()};load();
 </script>
 </body></html>`;
 }
@@ -196,8 +342,56 @@ document.querySelector("#refresh").onclick=load;document.querySelector("#sync").
 async function handle(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const parts = url.pathname.split("/").filter(Boolean);
+  const isWebhook = req.method === "POST" && parts[0] === "api" && parts[1] === "webhooks";
+  const isPublicApi = url.pathname === "/api/health" || url.pathname === "/api/login" || url.pathname === "/api/logout";
 
   try {
+    if (req.method === "GET" && url.pathname === "/login") {
+      if (isAuthenticated(req)) {
+        redirect(res, "/");
+        return;
+      }
+      send(res, 200, loginPage(), "text/html; charset=utf-8");
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/login") {
+      if (!isAuthConfigured()) {
+        send(res, 503, { error: "Login is not configured yet." });
+        return;
+      }
+      const body = await readFormOrJson(req);
+      const username = String(body.username || "");
+      const password = String(body.password || "");
+      const valid = safeStringEqual(username, getAuthUsername()) && safeStringEqual(password, getAuthPassword());
+      if (!valid) {
+        if (String(req.headers["content-type"] || "").includes("application/json")) {
+          send(res, 401, { error: "Invalid username or password" });
+        } else {
+          send(res, 401, loginPage("Invalid username or password."), "text/html; charset=utf-8");
+        }
+        return;
+      }
+      res.setHeader("Set-Cookie", sessionCookie(req, createSessionToken(username)));
+      if (String(req.headers["content-type"] || "").includes("application/json")) {
+        send(res, 200, { ok: true, username });
+      } else {
+        redirect(res, "/");
+      }
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/logout") {
+      res.setHeader("Set-Cookie", clearCookie());
+      send(res, 200, { ok: true });
+      return;
+    }
+    if (!isAuthenticated(req) && !isPublicApi && !isWebhook) {
+      if (url.pathname.startsWith("/api/")) {
+        send(res, 401, { error: "Login required" });
+      } else {
+        redirect(res, "/login");
+      }
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/api/health") {
       send(res, 200, { ok: true, app: "8 Step Close", baseUrl: BASE_URL, generatedAt: new Date().toISOString() });
       return;

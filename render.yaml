@@ -9,6 +9,12 @@ services:
     envVars:
       - key: APP_BASE_URL
         value: https://8stepclose.com
+      - key: LOGIN_USERNAME
+        sync: false
+      - key: LOGIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
       - key: WEBHOOK_SECRET
         sync: false
       - key: NODE_VERSION
