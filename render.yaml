@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: 8-step-close
+    env: node
+    plan: starter
+    buildCommand: ""
+    startCommand: "node server.js"
+    healthCheckPath: /api/health
+    envVars:
+      - key: APP_BASE_URL
+        value: https://8stepclose.com
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: NODE_VERSION
+        value: 22
