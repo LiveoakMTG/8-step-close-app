@@ -2,7 +2,7 @@
 
 Hosted starter for `8stepclose.com`.
 
-This is a Node web service for approved mortgage/CRM/property data intake from ARIVE, BNTouch, LoanOfficer.ai, myhomeIQ, CINC, and Zillow/Bridge.
+This is a Node web service for approved mortgage/CRM/property data intake from ARIVE, BNTouch, LoanOfficer.ai, myhomeIQ, CINC, and Zillow.
 
 Run locally:
 
@@ -22,6 +22,7 @@ Dashboard login is controlled with Render environment variables:
 LOGIN_USERNAME
 LOGIN_PASSWORD
 SESSION_SECRET
+ZILLOW_WEBHOOK_TOKEN
 ```
 
 Production webhook endpoints:
@@ -33,6 +34,12 @@ Production webhook endpoints:
 /api/webhooks/myhomeiq
 /api/webhooks/cinc
 /api/webhooks/zillow
+```
+
+Zillow lender contacts should use:
+
+```text
+/api/webhooks/zillow?token=YOUR_ZILLOW_WEBHOOK_TOKEN
 ```
 
 Before production borrower or lead data flows in, add a persistent database.

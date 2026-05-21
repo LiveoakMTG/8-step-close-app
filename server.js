@@ -43,12 +43,11 @@ const providers = {
     mode: "api-or-webhook"
   },
   zillow: {
-    name: "Zillow / Bridge",
-    category: "Property Data",
+    name: "Zillow Lender Contacts",
+    category: "Lender Leads",
     color: "#0284c7",
-    access: "Bridge API after Zillow Group data access approval.",
-    mode: "display-only",
-    displayOnly: true
+    access: "Zillow co-marketing posting URL for lender contact notifications.",
+    mode: "posting-url"
   }
 };
 
@@ -205,7 +204,7 @@ function connectors() {
     access: provider.access,
     syncMode: provider.mode,
     webhookPath: `/api/webhooks/${id}`,
-    status: provider.mode.includes("webhook") ? "Webhook ready" : "Needs credentials"
+    status: provider.mode.includes("posting") ? "Posting URL ready" : provider.mode.includes("webhook") ? "Webhook ready" : "Needs credentials"
   }));
 }
 
@@ -250,14 +249,68 @@ function readFormOrJson(req) {
   });
 }
 
-function normalize(provider, payload) {
+function nested(data, paths, fallback = "") {
+  for (const path of paths) {
+    const value = path.split(".").reduce((current, key) => {
+      if (current === undefined || current === null) return undefined;
+      return current[key];
+    }, data);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return fallback;
+}
+
+function flattenZillowContact(payload) {
   const data = Array.isArray(payload) ? payload[0] || {} : payload || {};
+  const details = data.details || {};
+  const quote = data.quote || {};
+  const firstName = nested(data, ["sender.firstName", "firstName"]);
+  const lastName = nested(data, ["sender.lastName", "lastName"]);
+  const propertyValue = nested(data, ["details.propertyValue", "propertyValue", "quote.zillow.propertyValue"]);
+  const loanAmount = nested(data, ["details.loanAmount", "loanAmount", "quote.zillow.loanAmount"]);
+  const fullPropertyAddress = nested(data, ["details.propertyAddress", "propertyAddress"]);
+  const notes = [
+    data.source ? `Source: ${data.source}` : "",
+    data.type ? `Zillow contact type: ${data.type}` : "",
+    details.loanPurpose ? `Loan purpose: ${details.loanPurpose}` : "",
+    details.creditScoreLow || details.creditScoreHigh
+      ? `Credit score range: ${[details.creditScoreLow, details.creditScoreHigh].filter(Boolean).join("-")}`
+      : "",
+    quote.rate ? `Quoted rate: ${quote.rate}` : ""
+  ].filter(Boolean);
+
+  return {
+    ...data,
+    id: nested(data, ["id", "contactId", "details.requestId", "requestId"]),
+    firstName,
+    lastName,
+    fullName: `${firstName} ${lastName}`.trim(),
+    email: nested(data, ["sender.emailAddress", "sender.email", "email"]),
+    phone: nested(data, ["sender.phoneNumber", "sender.phone", "phone"]),
+    type: "lead",
+    stage: nested(data, ["details.loanPurpose", "type"], "New Zillow contact"),
+    source: nested(data, ["source", "brand"], "Zillow"),
+    status: nested(data, ["channel"], "New"),
+    value: Number(loanAmount || propertyValue || 0),
+    owner: [nested(data, ["recipient.firstName"]), nested(data, ["recipient.lastName"])].filter(Boolean).join(" "),
+    propertyAddress: fullPropertyAddress || nested(data, ["details.streetAddress", "streetAddress"]),
+    streetAddress: nested(data, ["details.streetAddress", "streetAddress"]),
+    city: fullPropertyAddress ? "" : nested(data, ["details.city", "city"]),
+    state: fullPropertyAddress ? "" : nested(data, ["details.stateAbbreviation", "stateAbbreviation", "state"]),
+    zip: fullPropertyAddress ? "" : nested(data, ["details.zipCode", "zipCode", "zip"]),
+    notes: nested(data, ["message", "details.message"], notes.join("; ")),
+    raw: data
+  };
+}
+
+function normalize(provider, payload) {
+  const data = provider === "zillow" ? flattenZillowContact(payload) : Array.isArray(payload) ? payload[0] || {} : payload || {};
   const name = data.name || data.fullName || [data.firstName, data.lastName].filter(Boolean).join(" ") || "Unnamed record";
   const amount = Number(data.value || data.loanAmount || data.homeValue || data.purchasePrice || 0);
   return {
     id: `${provider}-${data.id || data.recordId || crypto.randomUUID()}`,
     provider,
-    type: data.type || (provider === "arive" ? "loan" : provider === "myhomeiq" || provider === "zillow" ? "property" : provider === "loanofficerai" ? "opportunity" : "lead"),
+    type: data.type || (provider === "arive" ? "loan" : provider === "myhomeiq" ? "property" : provider === "loanofficerai" ? "opportunity" : "lead"),
     name,
     email: data.email || "",
     phone: data.phone || data.mobile || "",
@@ -267,10 +320,27 @@ function normalize(provider, payload) {
     value: Number.isFinite(amount) ? amount : 0,
     owner: data.owner || data.assignedTo || data.loanOfficer || "",
     address: [data.propertyAddress || data.address, data.city, data.state, data.zip].filter(Boolean).join(", "),
-    updatedAt: new Date().toISOString(),
+    updatedAt: data.created || data.updatedAt || new Date().toISOString(),
     notes: data.notes || data.summary || "",
-    raw: data
+    raw: data.raw || data
   };
+}
+
+function webhookAuthorized(req, url, provider) {
+  const token = process.env[`${String(provider || "").toUpperCase()}_WEBHOOK_TOKEN`] || "";
+  if (!token) return true;
+  if (isAuthenticated(req)) return true;
+
+  const queryToken = url.searchParams.get("token") || url.searchParams.get("secret");
+  if (queryToken && safeStringEqual(queryToken, token)) return true;
+
+  const received = req.headers["x-hub-signature-256"] || req.headers["x-signature"];
+  if (!received) return false;
+
+  const expected = crypto.createHmac("sha256", token).update(url.pathname).digest("hex");
+  const normalized = String(received).replace(/^sha256=/, "");
+  if (expected.length !== normalized.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(normalized));
 }
 
 function loginPage(message = "") {
@@ -321,7 +391,7 @@ function page() {
 <section id="overview" class="metrics"><article class="metric"><span>Total records</span><strong id="totalRecords">0</strong></article><article class="metric"><span>Pipeline value</span><strong id="pipelineValue">$0</strong></article><article class="metric"><span>Hot items</span><strong id="hotItems">0</strong></article><article class="metric"><span>Active loans</span><strong id="activeLoans">0</strong></article></section>
 <section class="grid"><div id="connectors" class="panel"><div class="panel-head"><div><p class="eyebrow">Data sources</p><h2>Connectors</h2></div><span id="updated"></span></div><div id="connectorGrid" class="connectors"></div></div><div class="panel"><div class="panel-head"><div><p class="eyebrow">Activity</p><h2>Recent Events</h2></div></div><div id="events"></div></div></section>
 <section id="records" class="panel"><div class="panel-head"><div><p class="eyebrow">Unified view</p><h2>Records</h2></div><div class="filters"><input id="search" class="input" type="search" placeholder="Search records"><select id="provider" class="input"><option value="all">All sources</option></select><select id="type" class="input"><option value="all">All types</option><option value="lead">Leads</option><option value="loan">Loans</option><option value="contact">Contacts</option><option value="property">Properties</option><option value="opportunity">Opportunities</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Source</th><th>Type</th><th>Stage</th><th>Status</th><th>Value</th><th>Updated</th></tr></thead><tbody id="rows"></tbody></table></div></section>
-<section id="webhooks" class="grid"><div class="panel"><p class="eyebrow">Inbound data</p><h2>Webhook Tester</h2><form id="webhookForm"><p><select id="webhookProvider" class="input"></select></p><p><textarea id="payload" class="input"></textarea></p><button class="primary">Send Test Event</button></form></div><div class="panel"><p class="eyebrow">Setup</p><h2>Webhook URLs</h2><div id="webhookList" class="webhook-list"></div><div class="notice">Zillow / Bridge is marked display-only. Approved property data should be shown live according to Bridge/Zillow terms instead of silently saved.</div></div></section>
+<section id="webhooks" class="grid"><div class="panel"><p class="eyebrow">Inbound data</p><h2>Webhook Tester</h2><form id="webhookForm"><p><select id="webhookProvider" class="input"></select></p><p><textarea id="payload" class="input"></textarea></p><button class="primary">Send Test Event</button></form></div><div class="panel"><p class="eyebrow">Setup</p><h2>Webhook URLs</h2><div id="webhookList" class="webhook-list"></div><div class="notice">For Zillow lender contacts, send Zillow the Zillow posting URL so new co-marketing contacts can flow into this dashboard.</div></div></section>
 </main></div>
 <script>
 const fmt=new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});let connectors=[],records=[];
@@ -423,13 +493,16 @@ async function handle(req, res) {
     }
     if (req.method === "POST" && parts[0] === "api" && parts[1] === "webhooks" && providers[parts[2]]) {
       const provider = parts[2];
+      if (!webhookAuthorized(req, url, provider)) {
+        send(res, 401, { error: "Invalid webhook token" });
+        return;
+      }
       const payload = await readBody(req);
       const record = normalize(provider, payload);
-      const stored = !providers[provider].displayOnly;
-      if (stored) store.records.unshift(record);
-      const item = event(provider, stored ? `${providers[provider].name} webhook saved 1 record` : `${providers[provider].name} payload received for display preview only`);
+      store.records.unshift(record);
+      const item = event(provider, `${providers[provider].name} webhook saved 1 record`);
       store.events.push(item);
-      send(res, 202, { accepted: true, stored, records: [record], event: item, warning: stored ? null : "This connector is marked display-only; payload was not stored." });
+      send(res, 202, { accepted: true, stored: true, records: [record], event: item, warning: null });
       return;
     }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {

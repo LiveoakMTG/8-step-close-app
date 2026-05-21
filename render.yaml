@@ -17,5 +17,7 @@ services:
         sync: false
       - key: WEBHOOK_SECRET
         sync: false
+      - key: ZILLOW_WEBHOOK_TOKEN
+        sync: false
       - key: NODE_VERSION
         value: 22
