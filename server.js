@@ -263,6 +263,122 @@ function nested(data, paths, fallback = "") {
   return fallback;
 }
 
+function flattenAriveLoan(payload) {
+  const data = Array.isArray(payload) ? payload[0] || {} : payload || {};
+  const firstName = nested(data, [
+    "borrower.firstName",
+    "borrower_first_name",
+    "Borrower First Name",
+    "primaryBorrower.firstName",
+    "firstName"
+  ]);
+  const lastName = nested(data, [
+    "borrower.lastName",
+    "borrower_last_name",
+    "Borrower Last Name",
+    "primaryBorrower.lastName",
+    "lastName"
+  ]);
+  const coFirstName = nested(data, ["coBorrower.firstName", "co_borrower_first_name", "Co-Borrower First Name"]);
+  const coLastName = nested(data, ["coBorrower.lastName", "co_borrower_last_name", "Co-Borrower Last Name"]);
+  const borrowerName = nested(data, [
+    "borrower.fullName",
+    "borrowerName",
+    "Borrower Name",
+    "primaryBorrower.fullName",
+    "name",
+    "fullName"
+  ], `${firstName} ${lastName}`.trim());
+  const loanStage = nested(data, [
+    "loanStageName",
+    "Loan Stage Name (Arive)",
+    "Loan Stage Name",
+    "loan.stageName",
+    "loan.stage",
+    "loanStatus",
+    "Loan Status",
+    "status",
+    "milestone",
+    "stage"
+  ], "ARIVE loan update");
+  const loanAmount = Number(nested(data, [
+    "loanAmount",
+    "loan_amount",
+    "Loan Amount",
+    "loan.loanAmount",
+    "baseLoanAmount",
+    "purchasePrice",
+    "Purchase Price",
+    "property.purchasePrice",
+    "value"
+  ], 0));
+  const propertyAddress = nested(data, [
+    "property.fullAddress",
+    "propertyAddress",
+    "Property Address",
+    "subjectPropertyAddress",
+    "property.street",
+    "streetAddress",
+    "address"
+  ]);
+  const city = nested(data, ["property.city", "Property City", "city"]);
+  const state = nested(data, ["property.state", "Property State", "state"]);
+  const zip = nested(data, ["property.zip", "property.zipCode", "Property Zip", "zip", "zipCode"]);
+  const loanOfficer = nested(data, ["loanOfficer.fullName", "loanOfficer", "Loan Officer", "loName", "owner"]);
+  const processor = nested(data, ["processor.fullName", "processor", "Processor"]);
+  const coordinator = nested(data, ["loanCoordinator.fullName", "loanCoordinator", "Loan Coordinator", "lcName"]);
+  const funder = nested(data, ["funder.fullName", "funder", "Funder"]);
+  const importantDates = [
+    ["TRID", nested(data, ["tridDate", "TRID Date"])],
+    ["Disclosures", nested(data, ["disclosuresSentDate", "Disclosure Sent Date", "initialDisclosuresSentDate"])],
+    ["ITP", nested(data, ["itpSignedDate", "ITP Signed Date"])],
+    ["Submitted", nested(data, ["submittedDate", "Submitted Date"])],
+    ["CTC", nested(data, ["clearToCloseDate", "Clear To Close Date", "ctcDate"])],
+    ["Closing", nested(data, ["closingDate", "Closing Date", "estimatedClosingDate", "Est Closing Date"])],
+    ["Funding", nested(data, ["fundingDate", "Fund Date", "estimatedFundingDate", "Est Fund Date", "disbursementDate"])],
+    ["Finalized", nested(data, ["loanFinalizedDate", "Loan Finalized Date"])]
+  ].filter((item) => item[1]).map((item) => `${item[0]}: ${item[1]}`);
+  const trackerNotes = [
+    nested(data, ["lenderName", "Lender", "loan.lenderName"]) ? `Lender: ${nested(data, ["lenderName", "Lender", "loan.lenderName"])}` : "",
+    nested(data, ["lenderLoanNumber", "Lender Loan Number", "ariveOrInvestorLoanNo"]) ? `Lender loan #: ${nested(data, ["lenderLoanNumber", "Lender Loan Number", "ariveOrInvestorLoanNo"])}` : "",
+    nested(data, ["rateLockExpiration", "Lock Expiry Date", "lockExpiryDate"]) ? `Lock expires: ${nested(data, ["rateLockExpiration", "Lock Expiry Date", "lockExpiryDate"])}` : "",
+    nested(data, ["appraisalStatus", "Appraisal Status"]) ? `Appraisal: ${nested(data, ["appraisalStatus", "Appraisal Status"])}` : "",
+    nested(data, ["titleStatus", "Title Status"]) ? `Title: ${nested(data, ["titleStatus", "Title Status"])}` : "",
+    nested(data, ["hoiStatus", "HOI Status"]) ? `HOI: ${nested(data, ["hoiStatus", "HOI Status"])}` : "",
+    nested(data, ["conditionCount", "Conditions Count"]) ? `Conditions: ${nested(data, ["conditionCount", "Conditions Count"])}` : "",
+    nested(data, ["openTaskCount", "Open Task Count"]) ? `Open tasks: ${nested(data, ["openTaskCount", "Open Task Count"])}` : "",
+    ...importantDates,
+    nested(data, ["notes", "note", "summary", "description"])
+  ].filter(Boolean);
+
+  return {
+    ...data,
+    id: nested(data, ["ariveLoanId", "Arive Loan ID", "loanId", "loan.id", "id"]),
+    fullName: borrowerName,
+    firstName,
+    lastName,
+    email: nested(data, ["borrower.email", "borrowerEmail", "Borrower Email", "email"]),
+    phone: nested(data, ["borrower.phone", "borrowerPhone", "Borrower Phone", "phone", "mobile"]),
+    type: "loan",
+    stage: loanStage,
+    source: "ARIVE",
+    status: nested(data, ["loanStatus", "Loan Status", "status", "priority"], loanStage),
+    value: Number.isFinite(loanAmount) ? loanAmount : 0,
+    owner: loanOfficer,
+    processor,
+    coordinator,
+    funder,
+    coBorrowerName: `${coFirstName} ${coLastName}`.trim(),
+    propertyAddress,
+    city,
+    state,
+    zip,
+    notes: trackerNotes.join("; "),
+    updatedAt: nested(data, ["updatedAt", "Updated At", "modifiedAt", "lastModified", "created"], new Date().toISOString()),
+    raw: data
+  };
+}
+
 function flattenZillowContact(payload) {
   const data = Array.isArray(payload) ? payload[0] || {} : payload || {};
   const details = data.details || {};
@@ -408,11 +524,13 @@ function flattenMyhomeIq(payload) {
 }
 
 function normalize(provider, payload) {
-  const data = provider === "zillow"
-    ? flattenZillowContact(payload)
-    : provider === "myhomeiq"
-      ? flattenMyhomeIq(payload)
-      : Array.isArray(payload) ? payload[0] || {} : payload || {};
+  const data = provider === "arive"
+    ? flattenAriveLoan(payload)
+    : provider === "zillow"
+      ? flattenZillowContact(payload)
+      : provider === "myhomeiq"
+        ? flattenMyhomeIq(payload)
+        : Array.isArray(payload) ? payload[0] || {} : payload || {};
   const name = data.name || data.fullName || [data.firstName, data.lastName].filter(Boolean).join(" ") || "Unnamed record";
   const amount = Number(data.value || data.loanAmount || data.homeValue || data.purchasePrice || 0);
   return {
@@ -428,7 +546,7 @@ function normalize(provider, payload) {
     value: Number.isFinite(amount) ? amount : 0,
     owner: data.owner || data.assignedTo || data.loanOfficer || "",
     address: [data.propertyAddress || data.address, data.city, data.state, data.zip].filter(Boolean).join(", "),
-    updatedAt: data.created || data.updatedAt || new Date().toISOString(),
+    updatedAt: data.updatedAt || data.created || new Date().toISOString(),
     notes: data.notes || data.summary || "",
     raw: data.raw || data
   };

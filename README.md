@@ -22,6 +22,7 @@ Dashboard login is controlled with Render environment variables:
 LOGIN_USERNAME
 LOGIN_PASSWORD
 SESSION_SECRET
+ARIVE_WEBHOOK_TOKEN
 MYHOMEIQ_WEBHOOK_TOKEN
 ZILLOW_WEBHOOK_TOKEN
 ```
@@ -35,6 +36,12 @@ Production webhook endpoints:
 /api/webhooks/myhomeiq
 /api/webhooks/cinc
 /api/webhooks/zillow
+```
+
+ARIVE Zapier loan-cycle updates should use:
+
+```text
+/api/webhooks/arive?token=YOUR_ARIVE_WEBHOOK_TOKEN
 ```
 
 Zillow lender contacts should use:

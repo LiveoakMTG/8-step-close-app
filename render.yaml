@@ -17,6 +17,8 @@ services:
         sync: false
       - key: WEBHOOK_SECRET
         sync: false
+      - key: ARIVE_WEBHOOK_TOKEN
+        sync: false
       - key: MYHOMEIQ_WEBHOOK_TOKEN
         sync: false
       - key: ZILLOW_WEBHOOK_TOKEN
