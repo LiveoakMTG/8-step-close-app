@@ -54,9 +54,12 @@ const providers = {
 let store = {
   records: [
     demo("demo-lead-001", "cinc", "lead", "Avery Parker", "New buyer lead", "Hot", 625000),
-    demo("demo-loan-001", "arive", "loan", "Morgan Lee", "Processing", "Active", 482500),
+    demo("demo-application-001", "arive", "loan", "Morgan Lee", "Application started", "Active", 482500),
+    demo("demo-preapproval-001", "loanofficerai", "opportunity", "Jordan Smith", "Pre-approved", "High priority", 390000),
+    demo("demo-disclosures-001", "arive", "loan", "Sam Rivera", "Disclosures sent", "Active", 510000),
+    demo("demo-loan-cycle-001", "arive", "loan", "Casey Williams", "Processing", "Active", 455000),
+    demo("demo-closed-001", "arive", "loan", "Jamie Chen", "Closed", "Funded", 460000),
     demo("demo-contact-001", "bntouch", "contact", "Riley Dawson", "Past client nurture", "Warm", 0),
-    demo("demo-opportunity-001", "loanofficerai", "opportunity", "Jordan Smith", "Rate drop alert", "High priority", 390000),
     demo("demo-insight-001", "myhomeiq", "property", "Taylor Brooks", "Likely to move", "Watch", 715000)
   ],
   events: [
