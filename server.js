@@ -328,6 +328,13 @@ function flattenAriveLoan(payload) {
   const processor = nested(data, ["processor.fullName", "processor", "Processor"]);
   const coordinator = nested(data, ["loanCoordinator.fullName", "loanCoordinator", "Loan Coordinator", "lcName"]);
   const funder = nested(data, ["funder.fullName", "funder", "Funder"]);
+  const branch = nested(data, [
+    "branch.name",
+    "branchName",
+    "Branch Name",
+    "branch",
+    "Branch"
+  ]);
   const importantDates = [
     ["TRID", nested(data, ["tridDate", "TRID Date"])],
     ["Disclosures", nested(data, ["disclosuresSentDate", "Disclosure Sent Date", "initialDisclosuresSentDate"])],
@@ -339,6 +346,7 @@ function flattenAriveLoan(payload) {
     ["Finalized", nested(data, ["loanFinalizedDate", "Loan Finalized Date"])]
   ].filter((item) => item[1]).map((item) => `${item[0]}: ${item[1]}`);
   const trackerNotes = [
+    branch ? `Branch: ${branch}` : "",
     nested(data, ["lenderName", "Lender", "loan.lenderName"]) ? `Lender: ${nested(data, ["lenderName", "Lender", "loan.lenderName"])}` : "",
     nested(data, ["lenderLoanNumber", "Lender Loan Number", "ariveOrInvestorLoanNo"]) ? `Lender loan #: ${nested(data, ["lenderLoanNumber", "Lender Loan Number", "ariveOrInvestorLoanNo"])}` : "",
     nested(data, ["rateLockExpiration", "Lock Expiry Date", "lockExpiryDate"]) ? `Lock expires: ${nested(data, ["rateLockExpiration", "Lock Expiry Date", "lockExpiryDate"])}` : "",
@@ -368,6 +376,7 @@ function flattenAriveLoan(payload) {
     processor,
     coordinator,
     funder,
+    branch,
     coBorrowerName: `${coFirstName} ${coLastName}`.trim(),
     propertyAddress,
     city,
@@ -545,6 +554,7 @@ function normalize(provider, payload) {
     status: data.status || data.priority || "New",
     value: Number.isFinite(amount) ? amount : 0,
     owner: data.owner || data.assignedTo || data.loanOfficer || "",
+    branch: data.branch || data.branchName || "",
     address: [data.propertyAddress || data.address, data.city, data.state, data.zip].filter(Boolean).join(", "),
     updatedAt: data.updatedAt || data.created || new Date().toISOString(),
     notes: data.notes || data.summary || "",
@@ -567,6 +577,13 @@ function webhookAuthorized(req, url, provider) {
   const normalized = String(received).replace(/^sha256=/, "");
   if (expected.length !== normalized.length) return false;
   return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(normalized));
+}
+
+function ariveBranchAllowed(record) {
+  if (record.provider !== "arive") return true;
+  const branch = String(record.branch || record.raw?.branchName || record.raw?.Branch || record.raw?.["Branch Name"] || record.raw?.branch?.name || "").trim();
+  if (!branch) return true;
+  return /live oak mortgage/i.test(branch);
 }
 
 function loginPage(message = "") {
@@ -804,6 +821,12 @@ async function handle(req, res) {
       }
       const payload = await readBody(req);
       const record = normalize(provider, payload);
+      if (!ariveBranchAllowed(record)) {
+        const item = event(provider, "ARIVE webhook ignored non-Live Oak Mortgage branch record");
+        store.events.push(item);
+        send(res, 202, { accepted: true, stored: false, records: [], event: item, warning: "Ignored ARIVE record because its branch is not Live Oak Mortgage." });
+        return;
+      }
       store.records.unshift(record);
       const item = event(provider, `${providers[provider].name} webhook saved 1 record`);
       store.events.push(item);
