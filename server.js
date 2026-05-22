@@ -32,8 +32,8 @@ const providers = {
     name: "myhomeIQ",
     category: "Homeowner Intelligence",
     color: "#ea580c",
-    access: "CRM/LOS/spreadsheet sync; use vendor API only if provisioned.",
-    mode: "webhook-or-import"
+    access: "Zapier triggers for buyer/seller leads; custom webhook/API only if provisioned.",
+    mode: "zapier-webhook"
   },
   cinc: {
     name: "CINC",
@@ -303,8 +303,113 @@ function flattenZillowContact(payload) {
   };
 }
 
+function flattenMyhomeIq(payload) {
+  const data = Array.isArray(payload) ? payload[0] || {} : payload || {};
+  const leadType = String(nested(data, [
+    "eventType",
+    "event_type",
+    "trigger",
+    "leadType",
+    "lead_type",
+    "opportunityType",
+    "opportunity_type",
+    "type",
+    "Type"
+  ], "")).trim();
+  const lowerLeadType = leadType.toLowerCase();
+  const ownerName = nested(data, [
+    "property.ownerName",
+    "property.owner_name",
+    "propertyOwnerName",
+    "property_owner_name",
+    "Property owner name",
+    "ownerName",
+    "owner_name",
+    "client.name",
+    "clientName",
+    "client_name",
+    "name",
+    "fullName"
+  ]);
+  const firstName = nested(data, ["client.firstName", "client.first_name", "firstName", "first_name"]);
+  const lastName = nested(data, ["client.lastName", "client.last_name", "lastName", "last_name"]);
+  const email = nested(data, ["client.email", "clientEmail", "client_email", "Client email", "email", "Email"]);
+  const phone = nested(data, ["client.phone", "clientPhone", "client_phone", "Client phone number", "phone", "mobile"]);
+  const fullAddress = nested(data, [
+    "property.fullAddress",
+    "property.full_address",
+    "propertyFullAddress",
+    "property_full_address",
+    "Property full address",
+    "propertyAddress",
+    "property_address",
+    "address"
+  ]);
+  const street = nested(data, ["property.street", "propertyStreet", "property_street", "Property street", "street", "streetAddress"]);
+  const city = nested(data, ["property.city", "propertyCity", "property_city", "Property city", "city"]);
+  const state = nested(data, ["property.state", "propertyState", "property_state", "Property state", "state"]);
+  const zip = nested(data, ["property.zip", "propertyZip", "property_zip", "Property zip", "zip", "zipCode"]);
+  const value = Number(nested(data, [
+    "property.homeValue",
+    "property.home_value",
+    "propertyHomeValue",
+    "property_home_value",
+    "Property home value",
+    "homeValue",
+    "home_value",
+    "estimatedValue",
+    "estimated_value",
+    "propertyValue",
+    "property_value",
+    "salePrice",
+    "sale_price",
+    "Property sale price",
+    "loanAmount",
+    "loan_amount",
+    "Property loan amount",
+    "value"
+  ], 0));
+  const reportUrl = nested(data, ["reportUrl", "report_url", "homeownerReportUrl", "homeowner_report_url", "report.url"]);
+  const equity = nested(data, ["equity", "estimatedEquity", "estimated_equity", "property.equity"]);
+  const loanRate = nested(data, ["interestRate", "interest_rate", "Property interest rate"]);
+  const loanType = nested(data, ["loanType", "loan_type", "Property loan type"]);
+  const notes = [
+    reportUrl ? `Report: ${reportUrl}` : "",
+    equity ? `Estimated equity: ${equity}` : "",
+    loanRate ? `Interest rate: ${loanRate}` : "",
+    loanType ? `Loan type: ${loanType}` : "",
+    nested(data, ["notes", "note", "summary", "description"])
+  ].filter(Boolean);
+
+  return {
+    ...data,
+    id: nested(data, ["id", "recordId", "record_id", "leadId", "lead_id", "reportId", "report_id"]),
+    fullName: ownerName || `${firstName} ${lastName}`.trim(),
+    firstName,
+    lastName,
+    email,
+    phone,
+    type: lowerLeadType.includes("lead") || lowerLeadType.includes("buyer") || lowerLeadType.includes("seller") ? "lead" : "property",
+    stage: leadType || nested(data, ["stage", "status"], "myhomeIQ insight"),
+    source: nested(data, ["source", "leadSource", "lead_source"], "myhomeIQ"),
+    status: nested(data, ["priority", "status", "signal", "signalType", "signal_type"], "New"),
+    value: Number.isFinite(value) ? value : 0,
+    propertyAddress: fullAddress || street,
+    streetAddress: street,
+    city,
+    state,
+    zip,
+    notes: notes.join("; "),
+    raw: data
+  };
+}
+
 function normalize(provider, payload) {
-  const data = provider === "zillow" ? flattenZillowContact(payload) : Array.isArray(payload) ? payload[0] || {} : payload || {};
+  const data = provider === "zillow"
+    ? flattenZillowContact(payload)
+    : provider === "myhomeiq"
+      ? flattenMyhomeIq(payload)
+      : Array.isArray(payload) ? payload[0] || {} : payload || {};
   const name = data.name || data.fullName || [data.firstName, data.lastName].filter(Boolean).join(" ") || "Unnamed record";
   const amount = Number(data.value || data.loanAmount || data.homeValue || data.purchasePrice || 0);
   return {

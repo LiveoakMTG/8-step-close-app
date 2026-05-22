@@ -22,6 +22,7 @@ Dashboard login is controlled with Render environment variables:
 LOGIN_USERNAME
 LOGIN_PASSWORD
 SESSION_SECRET
+MYHOMEIQ_WEBHOOK_TOKEN
 ZILLOW_WEBHOOK_TOKEN
 ```
 
@@ -40,6 +41,12 @@ Zillow lender contacts should use:
 
 ```text
 /api/webhooks/zillow?token=YOUR_ZILLOW_WEBHOOK_TOKEN
+```
+
+myhomeIQ Zapier flows should use:
+
+```text
+/api/webhooks/myhomeiq?token=YOUR_MYHOMEIQ_WEBHOOK_TOKEN
 ```
 
 Before production borrower or lead data flows in, add a persistent database.
